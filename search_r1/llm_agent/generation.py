@@ -217,8 +217,12 @@ class LLMGenerationManager:
         padded_output.batch = trimmed_batch
         return padded_output
 
-    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor) -> Tuple[Dict, Dict]:
+    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor, batch_data: List[dict] = None) -> Tuple[Dict, Dict]:
         """Run main LLM generation loop."""
+        
+        # Set batch data for GSM8K interaction
+        if batch_data is not None:
+            self.set_batch_data(batch_data)
         
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
         original_right_side = {'responses': initial_input_ids[:, []], 'responses_with_info_mask': initial_input_ids[:, []]}
@@ -367,8 +371,9 @@ class LLMGenerationManager:
         cur_actions, contents = self.postprocess_predictions(predictions)
         next_obs, dones, valid_action, is_search = [], [], [], []
         
+        # Handle search queries for non-GSM8K tasks
         search_queries = [content for action, content in zip(cur_actions, contents) if action == 'search']
-        if do_search:
+        if do_search and hasattr(self, 'config') and self.config.search_url:
             search_results = self.batch_search(search_queries)
             assert len(search_results) == sum([1 for action in cur_actions if action == 'search'])
         else:
@@ -383,17 +388,56 @@ class LLMGenerationManager:
                 is_search.append(0)
             else:
                 if action == 'answer':
-                    next_obs.append('')
-                    dones.append(1)
-                    valid_action.append(1)
-                    is_search.append(0)
+                    # For GSM8K, check if answer is correct and provide feedback if needed
+                    if hasattr(self, '_batch_data') and self._batch_data is not None:
+                        data_item = self._batch_data[i] if i < len(self._batch_data) else None
+                        if data_item and data_item.get('data_source') == 'openai/gsm8k':
+                            # Check answer correctness for GSM8K
+                            answer_text = contents[i]
+                            ground_truth = data_item.get('ground_truth')
+                            
+                            if ground_truth and self._check_gsm8k_answer(answer_text, ground_truth):
+                                # Correct answer
+                                next_obs.append('')
+                                dones.append(1)
+                                valid_action.append(1)
+                                is_search.append(0)
+                            else:
+                                # Incorrect answer, provide feedback
+                                next_obs.append('\nYour response is incorrect! You need to reflect on your answer and try again.\n')
+                                dones.append(0)
+                                valid_action.append(1)
+                                is_search.append(0)
+                        else:
+                            # Non-GSM8K tasks
+                            next_obs.append('')
+                            dones.append(1)
+                            valid_action.append(1)
+                            is_search.append(0)
+                    else:
+                        # Default behavior when no batch data available
+                        next_obs.append('')
+                        dones.append(1)
+                        valid_action.append(1)
+                        is_search.append(0)
                 elif action == 'search':
                     next_obs.append(f'\n\n<information>{search_results.pop(0).strip()}</information>\n\n')
                     dones.append(0)
                     valid_action.append(1)
                     is_search.append(1)
                 else:
-                    next_obs.append(f'\nMy previous action is invalid. \
+                    # Check if this is GSM8K task for appropriate error message
+                    if hasattr(self, '_batch_data') and self._batch_data is not None:
+                        data_item = self._batch_data[i] if i < len(self._batch_data) else None
+                        if data_item and data_item.get('data_source') == 'openai/gsm8k':
+                            next_obs.append(f'\nMy previous action is invalid. \
+I should put my final answer between <answer> and </answer>. Let me try again.\n')
+                        else:
+                            next_obs.append(f'\nMy previous action is invalid. \
+If I want to search, I should put the query between <search> and </search>. \
+If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n')
+                    else:
+                        next_obs.append(f'\nMy previous action is invalid. \
 If I want to search, I should put the query between <search> and </search>. \
 If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n')
                     dones.append(0)
@@ -403,6 +447,14 @@ If I want to give the final answer, I should put the answer between <answer> and
         assert len(search_results) == 0
             
         return next_obs, dones, valid_action, is_search
+    
+    def _check_gsm8k_answer(self, answer_text: str, ground_truth: str) -> bool:
+        """Check if GSM8K answer is correct."""
+        return answer_text == ground_truth
+    
+    def set_batch_data(self, batch_data: List[dict]):
+        """Set batch data for environment interaction."""
+        self._batch_data = batch_data
 
     def postprocess_predictions(self, predictions: List[Any]) -> Tuple[List[int], List[bool]]:
         """

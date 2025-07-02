@@ -16,28 +16,45 @@ import re
 
 
 def extract_solution(solution_str, method='strict'):
-    assert method in ['strict', 'flexible']
 
     if method == 'strict':
-        # this also tests the formatting of the model
-        solution = re.search("#### (\\-?[0-9\\.\\,]+)", solution_str)
-        if solution is None:
+        # Find all <answer> blocks and get the last one
+        answer_blocks = re.findall(r'<answer>(.*?)</answer>', solution_str, re.DOTALL)
+        if not answer_blocks:
             final_answer = None
         else:
-            final_answer = solution.group(0)
-            final_answer = final_answer.split('#### ')[1].replace(',', '').replace('$', '')
+            # Get the last answer block
+            last_answer = answer_blocks[-1].strip()
+            # Extract the numeric value from the answer content
+            numeric_match = re.search(r'(\-?[0-9\.\,]+)', last_answer)
+            if numeric_match:
+                final_answer = numeric_match.group(1).replace(',', '').replace('$', '')
+            else:
+                final_answer = None
     elif method == 'flexible':
-        answer = re.findall("(\\-?[0-9\\.\\,]+)", solution_str)
-        final_answer = None
-        if len(answer) == 0:
-            # no reward is there is no answer
-            pass
+        # Find all <answer> blocks first
+        answer_blocks = re.findall(r'<answer>(.*?)</answer>', solution_str, re.DOTALL)
+        if not answer_blocks:
+            # If no answer blocks, fall back to finding any numbers in the text
+            answer = re.findall("(\\-?[0-9\\.\\,]+)", solution_str)
+            final_answer = None
+            if len(answer) == 0:
+                # no reward if there is no answer
+                pass
+            else:
+                invalid_str = ['', '.']
+                # find the last number that is not '.'
+                for final_answer in reversed(answer):
+                    if final_answer not in invalid_str:
+                        break
         else:
-            invalid_str = ['', '.']
-            # find the last number that is not '.'
-            for final_answer in reversed(answer):
-                if final_answer not in invalid_str:
-                    break
+            # Get the last answer block and extract numeric value
+            last_answer = answer_blocks[-1].strip()
+            numeric_match = re.search(r'(\-?[0-9\.\,]+)', last_answer)
+            if numeric_match:
+                final_answer = numeric_match.group(1).replace(',', '').replace('$', '')
+            else:
+                final_answer = None
     return final_answer
 
 

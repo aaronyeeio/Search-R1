@@ -512,9 +512,20 @@ class RayPPOTrainer(object):
                     first_input_ids = test_gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone()
                     with _timer('gen', timing_raw):
                         generation_manager.timing_raw = timing_raw
+                        
+                        # Prepare batch data for GSM8K interaction
+                        batch_data = []
+                        for i in range(len(test_batch)):
+                            item_data = {
+                                'data_source': test_batch.non_tensor_batch.get('data_source', ['unknown'])[i],
+                                'ground_truth': test_batch.non_tensor_batch.get('reward_model', [{}])[i].get('ground_truth', '')
+                            }
+                            batch_data.append(item_data)
+                        
                         final_gen_batch_output = generation_manager.run_llm_loop(
                             gen_batch=test_gen_batch,
                             initial_input_ids=first_input_ids,
+                            batch_data=batch_data,
                         )
                     
                     test_batch = test_batch.union(final_gen_batch_output)
@@ -726,9 +737,20 @@ class RayPPOTrainer(object):
 
                         with _timer('gen', timing_raw):
                             generation_manager.timing_raw = timing_raw
+                            
+                            # Prepare batch data for GSM8K interaction
+                            batch_data = []
+                            for i in range(len(batch)):
+                                item_data = {
+                                    'data_source': batch.non_tensor_batch.get('data_source', ['unknown'])[i],
+                                    'ground_truth': batch.non_tensor_batch.get('reward_model', [{}])[i].get('ground_truth', '')
+                                }
+                                batch_data.append(item_data)
+                            
                             final_gen_batch_output = generation_manager.run_llm_loop(
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
+                                batch_data=batch_data,
                             )
 
                         # final_gen_batch_output.batch.apply(lambda x: x.long(), inplace=True)
